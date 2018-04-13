@@ -120,6 +120,18 @@ sub _init_snmp {
   snmp_dispatcher();
 }
 
+# hash used to store collected snmp info.
+# Avoids to pass a lot of args in cascading called functions.
+sub _collected($) {
+  my $index = shift;
+  {
+    oid_index => $index,
+    size => undef,
+    used => undef,
+    allocation_units => undef,
+  };
+}
+
 sub _get_zpoolDescr {
   my ($session, $ng) = @_;
   my $result = $session->get_table(
@@ -148,23 +160,26 @@ sub _zpoolDescr_callback {
         $ng->opts->zpool));
   }
 
-  my $index = chop($oid);
-  _get_zpoolSize($session, $ng, $index);
+  my $collected = _collected(chop($oid));
+  _get_zpoolSize($session, $ng, $collected);
 }
 
 sub _get_zpoolSize {
-  my ($session, $ng, $index) = @_;
+  my ($session, $ng, $collected) = @_;
 
   my $result = $session->get_request(
-    -varbindlist    => [ sprintf('%s.%s', &FREENAS_MIB_zpoolSize, $index) ],
-    -callback       => [ \&_zpoolSize_callback, $ng, $index ],
+    -varbindlist    => [ 
+      sprintf('%s.%s', &FREENAS_MIB_zpoolSize, $collected->{oid_index}),
+    ],
+    -callback       => [ \&_zpoolSize_callback, $ng, $collected ],
   );
 
   _die($session, $ng) if !defined $result;
 }
 
+# collect the zpool size
 sub _zpoolSize_callback {
-  my ($session, $ng, $index) = @_;
+  my ($session, $ng, $collected) = @_;
   my $list = $session->var_bind_list();
   _die($session, $ng) if !$list;
 
@@ -176,25 +191,29 @@ sub _zpoolSize_callback {
 
   if (!defined $size) {
     _die($session, $ng, 
-      sprintf("no zpool size matches '%s.%s'", &FREENAS_MIB_zpoolSize, $index)
+      sprintf("no zpool size matches '%s.%s'", &FREENAS_MIB_zpoolSize,
+        $collected->{oid_index})
     );
   }
-  _get_zpoolUsed($session, $ng, $index, $size);
+  $collected->{size} = $size;
+  _get_zpoolUsed($session, $ng, $collected);
 }
 
 sub _get_zpoolUsed {
-  my ($session, $ng, $index, $size) = @_;
+  my ($session, $ng, $collected) = @_;
 
   my $result = $session->get_request(
-    -varbindlist    => [ sprintf('%s.%s', &FREENAS_MIB_zpoolUsed, $index) ],
-    -callback       => [ \&_zpoolUsed_callback, $ng, $index, $size ],
+    -varbindlist    => [ 
+      sprintf('%s.%s', &FREENAS_MIB_zpoolUsed, $collected->{oid_index}) ],
+    -callback       => [ \&_zpoolUsed_callback, $ng, $collected],
   );
 
   _die($session, $ng) if !defined $result;
 }
 
+# collect the zpool used
 sub _zpoolUsed_callback {
-  my ($session, $ng, $index, $size) = @_;
+  my ($session, $ng, $collected) = @_;
   my $list = $session->var_bind_list();
   _die($session, $ng) if !$list;
 
@@ -206,25 +225,30 @@ sub _zpoolUsed_callback {
 
   if (!defined $used) {
     _die($session, $ng, 
-      sprintf("no zpool used matches '%s.%s'", &FREENAS_MIB_zpoolUsed, $index)
+      sprintf("no zpool used matches '%s.%s'", &FREENAS_MIB_zpoolUsed, 
+        $collected->{oid_index})
     );
   }
-  _get_zpoolAllocationUnits($session, $ng, $index, $size, $used);
+  $collected->{used} = $used;
+  _get_zpoolAllocationUnits($session, $ng, $collected);
 }
 
 sub _get_zpoolAllocationUnits {
-  my ($session, $ng, $index, $size, $used) = @_;
+  my ($session, $ng, $collected) = @_;
 
   my $result = $session->get_request(
-    -varbindlist    => [ sprintf('%s.%s', &FREENAS_MIB_zpoolAllocationUnits, $index) ],
-    -callback       => [ \&_zpoolAllocationUnits_callback, $ng, $index, $size, $used ],
+    -varbindlist => [ 
+      sprintf('%s.%s', &FREENAS_MIB_zpoolAllocationUnits, 
+        $collected->{oid_index}) ],
+    -callback => [ \&_zpoolAllocationUnits_callback, $ng, $collected],
   );
 
   _die($session, $ng) if !defined $result;
 }
 
+# collect the allocation units
 sub _zpoolAllocationUnits_callback {
-  my ($session, $ng, $index, $size, $used) = @_;
+  my ($session, $ng, $collected) = @_;
   my $list = $session->var_bind_list();
   _die($session, $ng) if !$list;
 
@@ -237,19 +261,22 @@ sub _zpoolAllocationUnits_callback {
   if (!defined $aunits) {
     _die($session, $ng, 
       sprintf("no zpool allocation units matches '%s.%s'", 
-        &FREENAS_MIB_zpoolAllocationUnits, $index)
+        &FREENAS_MIB_zpoolAllocationUnits, $collected->{oid_index})
     );
   }
+  $collected->{allocation_units} = $aunits;
   $session->close();
-  _check_threshold($ng, $size, $used, $aunits);
+  _check_threshold($ng, $collected);
 }
 
 sub _check_threshold {
-  my ($ng, $size, $used, $aunits) = @_;
-  my $value = sprintf('%u', $used/$size*100);
+  my ($ng, $collected) = @_;
+  my $value = sprintf('%u', $collected->{used}/$collected->{size}*100);
   #TODO handle parameterized units
-  my $psize = sprintf('%u', $size*$aunits/1024/1024);
-  my $pused = sprintf('%u', $used*$aunits/1024/1024);
+  my $psize = sprintf('%u',
+    $collected->{size}*$collected->{allocation_units}/1024/1024);
+  my $pused = sprintf('%u',
+    $collected->{used}*$collected->{allocation_units}/1024/1024);
   $ng->plugin_exit(
     $ng->check_threshold(
       check => $value,
