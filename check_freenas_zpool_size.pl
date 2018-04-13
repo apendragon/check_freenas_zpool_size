@@ -1,12 +1,10 @@
 #!/usr/bin/env perl
 use strict;
 use warnings 'all';
+use Carp;
 use Monitoring::Plugin;
-use Monitoring::Plugin::Functions;
-use Monitoring::Plugin::ExitResult;
-use Monitoring::Plugin::Getopt;
-use Monitoring::Plugin::Threshold;
-use Net::SNMP qw/&oid_lex_sort &snmp_dispatcher &oid_base_match/;
+#TODO mange snmp import
+use Net::SNMP qw/ &snmp_dispatcher/;
 
 use Data::Dumper 'Dumper';
 
@@ -18,57 +16,95 @@ use constant {
   FREENAS_MIB_zpoolUsed => '1.3.6.1.4.1.50536.1.1.1.1.5',
 };
 
+#close snmp session if open
+sub _die {
+  my ($session, $ng, $msg) = @_;
+  if (!defined $msg) {
+    $msg = defined($session)
+      ? $session->error()
+      : "unable to open snmp session";
+  }
+  $session->close() if defined($session);
+  #TODO manage -v option
+  $ng->plugin_die($msg);
+}
+
 sub _getopts {
-  #my $ng= Monitoring::Plugin::Getopt->new(
   my $ng= Monitoring::Plugin->new(
     shortname => "freenas_zpool_size",
-    usage => "Usage: %s -H <host> -C <community> -z <zpool>" 
-      . "-w <warning> -c <critical>",
-    version => '2c',
-    url => 'https://github.com/apendragon/check_freenas_zpool',
-    blurb => 'This plugin uses FREENAS MIB to query zpool status with SNMP',
+    usage => "Usage: %s -H <host> -C <community> -z <zpool> " 
+      . "-w <warning> -c <critical> -t <timeout>",
+    version => $VERSION ,
+    url => 'https://github.com/freenas-monitoring-plugins/check_freenas_zpool_size',
+    blurb => 'This plugin uses FREENAS-OID to query zpool size with SNMP',
   );
-
-  $ng->add_arg(
-    'warning|w=i',
-    q(Exit with WARNING status if usage greater than INTEGER percent),
-    70,
-    1
-  );
-
-  $ng->add_arg(
-    'critical|c=i',
-    q(Exit with CRITICAL status if usage greater than INTEGER percent),
-    80,
-    1
-  );
-
-  $ng->add_arg(
-    'zpool|z=s',
-    q(zpool name to query usage),
-    'freenas-boot',
-    1
-  );
-
-  $ng->add_arg(
-    'hostname|H=s',
-    q(Hostname to query - required),
-    'localhost',
-    1
-  );
-
-  $ng->add_arg(
-    'community|C=s',
-    q(SNMP community),
-    'public',
-    1
-  );
-
+  
+  _get_opt_warning($ng);
+  _get_opt_critical($ng);
+  _get_opt_zpool($ng);
+  _get_opt_hostname($ng);
+  _get_opt_community($ng);
+  _get_opt_timeout($ng);
   $ng->getopts;
   $ng;
 }
 
-sub _snmpv2 {
+sub _get_opt_warning($) {
+  my $ng = shift;
+  $ng->add_arg(
+    spec => 'warning|w=i',
+    help => q(Exit with WARNING status if usage greater than INTEGER percent),
+    required => 1
+  );
+}
+
+sub _get_opt_critical($) {
+  my $ng = shift;
+  $ng->add_arg(
+    spec => 'critical|c=i',
+    help => q(Exit with CRITICAL status if usage greater than INTEGER percent),
+    required => 1
+  );
+}
+
+sub _get_opt_zpool($) {
+  my $ng = shift;
+  $ng->add_arg(
+    spec => 'zpool|z=s',
+    help => q(zpool name to query usage),
+    required => 1
+  );
+}
+
+sub _get_opt_hostname($) {
+  my $ng = shift;
+  $ng->add_arg(
+    spec => 'hostname|H=s',
+    help => q(Hostname to query - required),
+    required => 1
+  );
+}
+
+sub _get_opt_community($) {
+  my $ng = shift;
+  $ng->add_arg(
+    spec => 'community|C=s',
+    help => q(SNMP community),
+    required => 1
+  );
+}
+
+sub _get_opt_timeout($) {
+  my $ng = shift;
+  $ng->add_arg(
+    spec => 'timeout|t=i',
+    help => q(SNMP timeout),
+    default => '15',
+    required => 1
+  );
+}
+
+sub _init_snmp {
   my $ng = shift;
   my ($session, $error) = Net::SNMP->session(
     -hostname     => $ng->opts->hostname,
@@ -76,16 +112,12 @@ sub _snmpv2 {
     -nonblocking => 1,
     -translate   => [-octetstring => 0],
     -version     => 'snmpv2c',
+    -timeout     => $ng->opts->timeout,
   );
 
-  if (!defined $session) {
-    printf "ERROR: %s.\n", $error;
-    exit 1;
-  }
+  _die($session, $ng) if (!defined $session);
   _get_zpoolDescr($session, $ng);
-
   snmp_dispatcher();
-  $session->close();
 }
 
 sub _get_zpoolDescr {
@@ -95,31 +127,25 @@ sub _get_zpoolDescr {
     -callback       => [ \&_zpoolDescr_callback, $ng ],
   );
 
-  if (!defined $result) {
-    $session->close();
-    $ng->plugin_die("no result has been received");
-  }
+  _die($session, $ng) if (!defined $result);
 }
 
 sub _zpoolDescr_callback {
   my ($session, $ng) = @_;
   my $list = $session->var_bind_list();
-  if (!defined $list) {
-    $ng->plugin_die(session->error());
+  _die($session, $ng) if !defined $list;
+
+  my $oid = undef;
+  while (my ($k, $v) = each %$list) {
+    if ($v eq $ng->opts->zpool) {
+      $oid = $k;
+      last;
+    }
   }
 
-  my @names = $session->var_bind_names();
-  my $next  = undef;
-  my $oid = undef;
-  while (@names) {
-    $next = shift @names;
-    if ($list->{$next} eq $ng->opts->zpool) {
-      $oid = $next;
-      last;
-    } 
-  }
   if (!defined $oid) {
-    $ng->plugin_die(sprintf("no zpool descr matches '%s'", $ng->zpool));
+    _die($session, $ng, sprintf("no zpool descr matches '%s'",
+        $ng->opts->zpool));
   }
 
   my $index = chop($oid);
@@ -134,28 +160,22 @@ sub _get_zpoolSize {
     -callback       => [ \&_zpoolSize_callback, $ng, $index ],
   );
 
-  if (!defined $result) {
-    $ng->plugin_die(session->error());
-  }
+  _die($session, $ng) if !defined $result;
 }
 
 sub _zpoolSize_callback {
   my ($session, $ng, $index) = @_;
   my $list = $session->var_bind_list();
-  if (!defined $list) {
-    $ng->plugin_die(session->error());
-  }
+  _die($session, $ng) if !$list;
 
-  my @names = $session->var_bind_names();
-  my $next  = undef;
   my $size = undef;
-  while (@names) {
-    $next = shift @names;
-    $size = $list->{$next};
+  for my $v (values %$list) {
+    $size = $v;
     last;
   }
+
   if (!defined $size) {
-    $ng->plugin_die(
+    _die($session, $ng, 
       sprintf("no zpool size matches '%s.%s'", &FREENAS_MIB_zpoolSize, $index)
     );
   }
@@ -170,50 +190,80 @@ sub _get_zpoolUsed {
     -callback       => [ \&_zpoolUsed_callback, $ng, $index, $size ],
   );
 
-  if (!defined $result) {
-    $ng->plugin_die(session->error());
-  }
+  _die($session, $ng) if !defined $result;
 }
 
 sub _zpoolUsed_callback {
   my ($session, $ng, $index, $size) = @_;
   my $list = $session->var_bind_list();
-  if (!defined $list) {
-    $ng->plugin_die(session->error());
-  }
+  _die($session, $ng) if !$list;
 
-  my @names = $session->var_bind_names();
-  my $next  = undef;
   my $used = undef;
-  while (@names) {
-    $next = shift @names;
-    $used = $list->{$next};
+  for my $v (values %$list) {
+    $used = $v;
     last;
   }
-  if (!defined $size) {
-    $ng->plugin_die(
+
+  if (!defined $used) {
+    _die($session, $ng, 
       sprintf("no zpool used matches '%s.%s'", &FREENAS_MIB_zpoolUsed, $index)
     );
   }
-  _check_threshold($ng, $size, $used);
+  _get_zpoolAllocationUnits($session, $ng, $index, $size, $used);
+}
+
+sub _get_zpoolAllocationUnits {
+  my ($session, $ng, $index, $size, $used) = @_;
+
+  my $result = $session->get_request(
+    -varbindlist    => [ sprintf('%s.%s', &FREENAS_MIB_zpoolAllocationUnits, $index) ],
+    -callback       => [ \&_zpoolAllocationUnits_callback, $ng, $index, $size, $used ],
+  );
+
+  _die($session, $ng) if !defined $result;
+}
+
+sub _zpoolAllocationUnits_callback {
+  my ($session, $ng, $index, $size, $used) = @_;
+  my $list = $session->var_bind_list();
+  _die($session, $ng) if !$list;
+
+  my $aunits = undef;
+  for my $v (values %$list) {
+    $aunits = $v;
+    last;
+  }
+
+  if (!defined $aunits) {
+    _die($session, $ng, 
+      sprintf("no zpool allocation units matches '%s.%s'", 
+        &FREENAS_MIB_zpoolAllocationUnits, $index)
+    );
+  }
+  $session->close();
+  _check_threshold($ng, $size, $used, $aunits);
 }
 
 sub _check_threshold {
-  my ($ng, $size, $used) = @_;
+  my ($ng, $size, $used, $aunits) = @_;
   my $value = sprintf('%u', $used/$size*100);
+  #TODO handle parameterized units
+  my $psize = sprintf('%u', $size*$aunits/1024/1024);
+  my $pused = sprintf('%u', $used*$aunits/1024/1024);
   $ng->plugin_exit(
     $ng->check_threshold(
       check => $value,
       warning => $ng->opts->warning,
       critical => $ng->opts->critical,
     ),
-    $value
+    sprintf('%s: %s/%s MB (%s%%)', $ng->opts->zpool, $pused, $psize, $value)
   );
 }
 
-sub _main {
+sub main {
   my $ng = _getopts;
-  _snmpv2($ng);
+  #TODO handle all SNMP versionss
+  _init_snmp($ng);
 };
 
-_main;
+main;
