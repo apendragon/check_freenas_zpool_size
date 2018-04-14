@@ -3,7 +3,7 @@ use strict;
 use warnings 'all';
 
 our $VERSION = '0.01';
-use Net::SNMP;
+use Net::SNMP qw/:debug :snmp/;
 use Monitoring::Plugin;
 
 use constant {
@@ -100,6 +100,12 @@ sub _get_opt_zpool($) {
   );
 }
 
+sub _snmp_debug {
+  my $ng = shift;
+  return DEBUG_MESSAGE if $ng->opts->verbose >= 3;
+  return DEBUG_NONE;
+}
+
 sub _init_snmp {
   my $ng = shift;
   my ($session, $error) = Net::SNMP->session(
@@ -107,6 +113,7 @@ sub _init_snmp {
     -community    => $ng->opts->community,
     -nonblocking => 1,
     -translate   => [-octetstring => 0],
+    -debug       => _snmp_debug($ng),
     #TODO manage snmp versions
     -version     => 'snmpv2c',
     -timeout     => $ng->opts->timeout,
