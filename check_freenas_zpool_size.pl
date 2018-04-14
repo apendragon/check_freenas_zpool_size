@@ -1,14 +1,11 @@
 #!/usr/bin/env perl
 use strict;
 use warnings 'all';
-use Carp;
+
+our $VERSION = '0.01';
+use Net::SNMP;
 use Monitoring::Plugin;
-#TODO mange snmp import
-use Net::SNMP qw/ &snmp_dispatcher/;
 
-use Data::Dumper 'Dumper';
-
-my $VERSION = '0.01';
 use constant {
   FREENAS_MIB_zpoolDescr => '1.3.6.1.4.1.50536.1.1.1.1.2',
   FREENAS_MIB_zpoolAllocationUnits => '1.3.6.1.4.1.50536.1.1.1.1.3',
@@ -25,35 +22,34 @@ sub _die {
       : "unable to open snmp session";
   }
   $session->close() if defined($session);
-  #TODO manage -v option
   $ng->plugin_die($msg);
 }
 
-sub _getopts {
+sub getopts {
   my $ng= Monitoring::Plugin->new(
     shortname => "freenas_zpool_size",
     usage => "Usage: %s -H <host> -C <community> -z <zpool> " 
       . "-w <warning> -c <critical> -t <timeout>",
-    version => $VERSION ,
+    version => $VERSION,
     url => 'https://github.com/freenas-monitoring-plugins/check_freenas_zpool_size',
-    blurb => 'This plugin uses FREENAS-OID to query zpool size with SNMP',
+    blurb => 'This plugin uses FREENAS-MIB to query zpool size with SNMP',
   );
   
-  _get_opt_warning($ng);
   _get_opt_critical($ng);
-  _get_opt_zpool($ng);
-  _get_opt_hostname($ng);
   _get_opt_community($ng);
+  _get_opt_hostname($ng);
   _get_opt_timeout($ng);
+  _get_opt_warning($ng);
+  _get_opt_zpool($ng);
   $ng->getopts;
   $ng;
 }
 
-sub _get_opt_warning($) {
+sub _get_opt_community($) {
   my $ng = shift;
   $ng->add_arg(
-    spec => 'warning|w=i',
-    help => q(Exit with WARNING status if usage greater than INTEGER percent),
+    spec => 'community|C=s',
+    help => q(SNMP community),
     required => 1
   );
 }
@@ -67,29 +63,11 @@ sub _get_opt_critical($) {
   );
 }
 
-sub _get_opt_zpool($) {
-  my $ng = shift;
-  $ng->add_arg(
-    spec => 'zpool|z=s',
-    help => q(zpool name to query usage),
-    required => 1
-  );
-}
-
 sub _get_opt_hostname($) {
   my $ng = shift;
   $ng->add_arg(
     spec => 'hostname|H=s',
     help => q(Hostname to query - required),
-    required => 1
-  );
-}
-
-sub _get_opt_community($) {
-  my $ng = shift;
-  $ng->add_arg(
-    spec => 'community|C=s',
-    help => q(SNMP community),
     required => 1
   );
 }
@@ -104,6 +82,24 @@ sub _get_opt_timeout($) {
   );
 }
 
+sub _get_opt_warning($) {
+  my $ng = shift;
+  $ng->add_arg(
+    spec => 'warning|w=i',
+    help => q(Exit with WARNING status if usage greater than INTEGER percent),
+    required => 1
+  );
+}
+
+sub _get_opt_zpool($) {
+  my $ng = shift;
+  $ng->add_arg(
+    spec => 'zpool|z=s',
+    help => q(zpool name to query usage),
+    required => 1
+  );
+}
+
 sub _init_snmp {
   my $ng = shift;
   my ($session, $error) = Net::SNMP->session(
@@ -111,6 +107,7 @@ sub _init_snmp {
     -community    => $ng->opts->community,
     -nonblocking => 1,
     -translate   => [-octetstring => 0],
+    #TODO manage snmp versions
     -version     => 'snmpv2c',
     -timeout     => $ng->opts->timeout,
   );
@@ -159,7 +156,6 @@ sub _zpoolDescr_callback {
     _die($session, $ng, sprintf("no zpool descr matches '%s'",
         $ng->opts->zpool));
   }
-
   my $collected = _collected(chop($oid));
   _get_zpoolSize($session, $ng, $collected);
 }
@@ -287,10 +283,5 @@ sub _check_threshold {
   );
 }
 
-sub main {
-  my $ng = _getopts;
-  #TODO handle all SNMP versionss
-  _init_snmp($ng);
-};
-
-main;
+my $ng = getopts();
+_init_snmp($ng);
