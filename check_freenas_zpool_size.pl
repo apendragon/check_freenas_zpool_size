@@ -2,9 +2,9 @@
 use strict;
 use warnings 'all';
 
-our $VERSION = '0.01';
 use Net::SNMP qw/:debug :snmp/;
 use Monitoring::Plugin;
+our $VERSION = '0.01';
 
 #Crypt/Rijndae is required to use AES as privacy protocol with snmpv3
 
@@ -412,7 +412,37 @@ sub _check_threshold {
   );
 }
 
+sub _debug {
+  my ($msg) = @_;
+  printf STDERR "%s\n", $msg; 
+}
+
+#Iterate through symbols to inject printing of function name to make debug easier 
+{
+  no strict;
+  no warnings;
+  my @DEBUG = qw(
+    check_opts _check_opts_snmpv2c _init_snmpv2c _check_opts_snmpv3 _init_snmpv3
+    _switch_snmp_version _snmp_debug
+    _get_zpoolDescr _zpoolDescr_callback
+    _get_zpoolSize _zpoolSize_callback
+    _get_zpoolUsed _zpoolUsed_callback
+    _get_zpoolAllocationUnits _zpoolAllocationUnits_callback
+    check init_snmp
+  );
+  sub _inject_debugging {
+    for my $f (@DEBUG) {
+      my $sub = \&{'main::' . $f};
+      *{'main::' . $f} = sub {
+        _debug($f);
+        &$sub;
+      };
+    }
+  }
+}
+
 my $ng = getopts();
+_inject_debugging() if $ng->opts->verbose >=2;
 check_opts($ng);
 my $session = init_snmp($ng);
 check($ng, $session);
