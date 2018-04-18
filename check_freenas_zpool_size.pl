@@ -49,7 +49,14 @@ sub FETCH_CODE_ATTRIBUTES {
   }
 }
 
+sub _debug {
+  my ($msg) = @_;
+  printf STDERR "%s\n", $msg;
+}
+
 # END OF DEBUGGING FEATURES ####################################################
+# accept unit of measurement
+my @UOM = ('KB', 'MB', 'GB', 'TB');
 
 use constant {
   FREENAS_MIB_zpoolDescr => '1.3.6.1.4.1.50536.1.1.1.1.2',
@@ -79,7 +86,7 @@ sub getopts {
     usage => "Usage: %s -H <host> -C <community> -z <zpool> "
       . "-w <warning> -c <critical> -t <timeout> "
       . "[-U <secname> -A <authpassword> -X <privpasswd> "
-      . "-a <authproto> -x <privproto>]",
+      . "-a <authproto> -x <privproto>] -u <unit_of_measurement>",
     version => $VERSION,
     url => 'https://github.com/freenas-monitoring-plugins/check_freenas_zpool_size',
     blurb => 'This plugin uses FREENAS-MIB to query zpool size with SNMP',
@@ -91,6 +98,7 @@ sub getopts {
   _get_opt_timeout($ng);
   _get_opt_warning($ng);
   _get_opt_zpool($ng);
+  _get_opt_uom($ng);
   _get_opt_username($ng);
   _get_opt_password($ng);
   _get_opt_passphrase($ng);
@@ -150,6 +158,16 @@ sub _get_opt_zpool($) {
   $ng->add_arg(
     spec => 'zpool|z=s',
     help => q(zpool name to query usage),
+    required => 1
+  );
+}
+
+sub _get_opt_uom($) {
+  my $ng = shift;
+  $ng->add_arg(
+    spec => 'uom|u=s',
+    help => q(Unit Of Measurement [KB|MB|GB|TB]),
+    default => 'KB',
     required => 1
   );
 }
@@ -219,12 +237,23 @@ sub _check_opts_snmpv3 :Debug {
   }
 }
 
+sub _check_opts_uom :Debug {
+  my $ng = shift;
+  my $uom = $ng->opts->uom;
+  if ($uom !~ /^((KB)|(MB)|(GB)|(TB))$/) {
+    my $msg = $ng->opts->_usage . "\n";
+    $msg .= "'uom' arg must be 'KB' or 'MB' or 'GB' or 'TB'\n";
+    Monitoring::Plugin::Functions::_plugin_exit(3, $msg);
+  }
+}
+
 sub check_opts :Debug {
   my $ng = shift;
   my $snmp_vers = _switch_snmp_version($ng);
   $snmp_vers eq 'snmpv3'
     ? _check_opts_snmpv3($ng)
     : _check_opts_snmpv2c($ng);
+  _check_opts_uom($ng);
 }
 
 sub _snmp_debug :Debug {
@@ -437,27 +466,38 @@ sub _zpoolAllocationUnits_callback :Debug {
   _check_threshold($ng, $collected);
 }
 
+sub _uom_sprintf {
+  my ($uom, $value) = @_;
+  my $d = {
+    KB => sub { sprintf("%u", $value) },
+    MB => sub { sprintf("%u", $value) },
+    GB => sub { sprintf("%.2f", $value) },
+    TB => sub { sprintf("%.2f", $value) },
+  };
+  $d->{$uom}->();
+}
+
+sub _manage_uom {
+  my ($ng, $collected, $value) = @_;
+  my $uom = $ng->opts->uom;
+  my ($i)  = grep { $UOM[$_] eq $uom } (0 .. @UOM-1);
+  _uom_sprintf($uom, $value*$collected->{allocation_units}/(1024**($i+1)));
+}
+
 sub _check_threshold :Debug {
   my ($ng, $collected) = @_;
   my $value = sprintf('%u', $collected->{used}/$collected->{size}*100);
-  #TODO handle parameterized units
-  my $psize = sprintf('%u',
-    $collected->{size}*$collected->{allocation_units}/1024/1024);
-  my $pused = sprintf('%u',
-    $collected->{used}*$collected->{allocation_units}/1024/1024);
+  my $psize = _manage_uom($ng, $collected, $collected->{size});
+  my $pused = _manage_uom($ng, $collected, $collected->{used});
   $ng->plugin_exit(
     $ng->check_threshold(
       check => $value,
       warning => $ng->opts->warning,
       critical => $ng->opts->critical,
     ),
-    sprintf('%s: %s/%s MB (%s%%)', $ng->opts->zpool, $pused, $psize, $value)
+    sprintf('%s: %s/%s %s (%s%%)', $ng->opts->zpool, $pused, $psize, 
+      $ng->opts->uom, $value)
   );
-}
-
-sub _debug {
-  my ($msg) = @_;
-  printf STDERR "%s\n", $msg;
 }
 
 my $ng = getopts();
