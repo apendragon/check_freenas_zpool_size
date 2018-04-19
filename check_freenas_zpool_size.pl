@@ -5,6 +5,7 @@ use warnings 'all';
 #Crypt/Rijndae is required to use AES as privacy protocol with snmpv3
 use Net::SNMP qw/:debug :snmp/;
 use Monitoring::Plugin;
+use Monitoring::Plugin::Performance;
 
 use attributes;
 use Scalar::Util 'refaddr';
@@ -25,7 +26,6 @@ sub FETCH_CODE_ATTRIBUTES {
   my $decorators = $attrs{ refaddr $code };
   defined $decorators ? @$decorators : ();
 }
-
 
 #Iterate through symbols to inject printing of function name to make debug easier
 {
@@ -466,7 +466,7 @@ sub _zpoolAllocationUnits_callback :Debug {
   _check_threshold($ng, $collected);
 }
 
-sub _uom_sprintf {
+sub _uom_sprintf :Debug {
   my ($uom, $value) = @_;
   my $d = {
     KB => sub { sprintf("%u", $value) },
@@ -477,11 +477,31 @@ sub _uom_sprintf {
   $d->{$uom}->();
 }
 
-sub _manage_uom {
+sub _manage_uom :Debug {
   my ($ng, $collected, $value) = @_;
   my $uom = $ng->opts->uom;
   my ($i)  = grep { $UOM[$_] eq $uom } (0 .. @UOM-1);
   _uom_sprintf($uom, $value*$collected->{allocation_units}/(1024**($i+1)));
+}
+
+sub _sprint_perf :Debug {
+  my ($ng, $collected) = @_;
+  my $value = _manage_uom($ng, $collected, $collected->{used});
+  my $warning = _manage_uom($ng, $collected,
+    $ng->opts->warning*$collected->{size}/100);
+  my $critical = _manage_uom($ng, $collected,
+    $ng->opts->critical*$collected->{size}/100);
+  my $max= _manage_uom($ng, $collected, $collected->{size});
+  my $perf = Monitoring::Plugin::Performance->new(
+    label => 'size',
+    value => $value,
+    uom   => $ng->opts->uom,
+    warning => $warning,
+    critical => $critical,
+    min => 0,
+    max => $max,
+  );
+  $perf->perfoutput;
 }
 
 sub _check_threshold :Debug {
@@ -489,14 +509,15 @@ sub _check_threshold :Debug {
   my $value = sprintf('%u', $collected->{used}/$collected->{size}*100);
   my $psize = _manage_uom($ng, $collected, $collected->{size});
   my $pused = _manage_uom($ng, $collected, $collected->{used});
+  my $perf = _sprint_perf($ng, $collected);
   $ng->plugin_exit(
     $ng->check_threshold(
       check => $value,
       warning => $ng->opts->warning,
       critical => $ng->opts->critical,
     ),
-    sprintf('%s: %s/%s %s (%s%%)', $ng->opts->zpool, $pused, $psize, 
-      $ng->opts->uom, $value)
+    sprintf('%s: %s/%s %s (%s%%) |%s', $ng->opts->zpool, $pused, $psize, 
+      $ng->opts->uom, $value, $perf)
   );
 }
 
