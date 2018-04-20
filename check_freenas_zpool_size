@@ -85,7 +85,7 @@ sub _examples {
 
 Notes:
   To use 'AES' SNMPv3 privacy protocol Crypt/Rijndae perlmod installation is
-  on the running host.
+  required on the running host.
   Use '-vvv' debugging to troubleshoot any SNMPv3 encountered communication
   problems.
 

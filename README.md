@@ -48,7 +48,7 @@ Tested with FreeNAS-11.1-U2, icinga 2.8.2, icingaweb 2.5.1, perl 5.26.1, Monitor
 
 ## Notes:
   To use 'AES' SNMPv3 privacy protocol Crypt/Rijndae perlmod installation is
-  on the running host.
+  required on the running host.
   
   Use '-vvv' debugging to troubleshoot any SNMPv3 encountered communication
   problems.
