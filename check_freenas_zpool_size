@@ -80,6 +80,69 @@ sub _die :Debug {
   $ng->plugin_die($msg);
 }
 
+sub _examples {
+<<EOF;
+
+Notes:
+  To use 'AES' SNMPv3 privacy protocol Crypt/Rijndae perlmod installation is
+  on the running host.
+  Use '-vvv' debugging to troubleshoot any SNMPv3 encountered communication
+  problems.
+
+Examples:
+  CHECK ZPOOL WITH SNMPv2: check_freenas_zpool_size -H myfreenas.example.com -z raid -w 70 -c 80 -C public
+
+  Check the zpool named 'raid' from myfreenas.example.com by using 'public'
+  community and raise warnings at 70% of used space and critical at 80%.
+
+  CHECK ZPOOL WITH SNMPv3: check_freenas_zpool_size -H myfreenas.example.com -z raid -w 70 -c 80 -U myuser -A mqlkdqfmLIHMOyçè67sdf -X yYOOJMohimoç96e283 -a SHA -x AES -u TB 
+
+  Check the zpool named 'raid' from myfreenas.example.com by using 'myuser'
+  user, 'mqlkdqfmLIHMOyçè67sdf' authentication password, 'yYOOJMohimoç96e283'
+  private password, 'SHA' authentication protocol, 'AES' privacy protocol,
+  'TB' unit of measurement and raise warnings at 70% of used space and 
+  critical at 80%.
+
+Debugging:
+  -vv option will display the executed method while running the plugin
+  -vvv option will also display all the SNMP dialog managed by Net::SNMP
+EOF
+}
+
+sub _license {
+<<EOF
+LICENSE AND COPYRIGHT
+
+Copyright (C) 2018 Thomas Cazali
+
+This program is distributed under the (Simplified) BSD License:
+L<http://www.opensource.org/licenses/BSD-2-Clause>
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+* Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright
+notice, this list of conditions and the following disclaimer in the
+documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+EOF
+}
+
 sub getopts {
   my $ng= Monitoring::Plugin->new(
     shortname => "freenas_zpool_size",
@@ -89,13 +152,15 @@ sub getopts {
       . "-a <authproto> -x <privproto>] -u <unit_of_measurement>",
     version => $VERSION,
     url => 'https://github.com/freenas-monitoring-plugins/check_freenas_zpool_size',
-    blurb => 'This plugin uses FREENAS-MIB to query zpool size with SNMP',
+    blurb => 'This plugin uses FREENAS-MIB to query zpool size with SNMPv2c or SNMPv3',
+    license => _license(),
+    extra => _examples(),
+    
   );
  
   _get_opt_critical($ng);
   _get_opt_community($ng);
   _get_opt_hostname($ng);
-  _get_opt_timeout($ng);
   _get_opt_warning($ng);
   _get_opt_zpool($ng);
   _get_opt_uom($ng);
@@ -130,16 +195,6 @@ sub _get_opt_hostname($) {
   $ng->add_arg(
     spec => 'hostname|H=s',
     help => q(Hostname to query - required),
-    required => 1
-  );
-}
-
-sub _get_opt_timeout($) {
-  my $ng = shift;
-  $ng->add_arg(
-    spec => 'timeout|t=i',
-    help => q(SNMP timeout),
-    default => '15',
     required => 1
   );
 }
